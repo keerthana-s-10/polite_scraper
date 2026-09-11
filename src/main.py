@@ -1,26 +1,24 @@
-import time
 from pathlib import Path
+from urllib.parse import urljoin
 
 import requests
+from bs4 import BeautifulSoup
 
-URL = "https://books.toscrape.com/"
-CACHE_FILE = Path("cache/catalogue-page-1.html")
-USER_AGENT = "FlyRankInternship-A9/1.0 (+https://github.com/YOUR_USERNAME/YOUR_REPO)"
+BASE_URL = "https://books.toscrape.com/"
+CACHE_DIR = Path("cache")
+USER_AGENT = "FlyRankInternship-A9/1.0 (+https://github.com/keerthana-s-10/polite_scraper)"
 
-def fetch_page():
-    if CACHE_FILE.exists():
-        content = CACHE_FILE.read_text(encoding="utf-8")
-        print(f"CACHE HIT: {CACHE_FILE}")
-        print(f"response_size={len(content)}")
-        return content
 
-    headers = {"User-Agent": USER_AGENT}
+def get_page(url, cache_file):
+    if cache_file.exists():
+        print(f"CACHE HIT: {cache_file}")
+        return cache_file.read_text(encoding="utf-8")
 
-    print(f"FETCH: {URL}")
+    print(f"FETCH: {url}")
 
     response = requests.get(
-        URL,
-        headers=headers,
+        url,
+        headers={"User-Agent": USER_AGENT},
         timeout=10
     )
 
@@ -28,17 +26,38 @@ def fetch_page():
         raise RuntimeError(f"Unexpected status code: {response.status_code}")
 
     content = response.text
-
-    CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CACHE_FILE.write_text(content, encoding="utf-8")
-
-    print(f"response_size={len(content)}")
-    print(f"cached={CACHE_FILE}")
-
-    time.sleep(0.5)
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(content, encoding="utf-8")
 
     return content
 
 
+def discover_books():
+    all_urls = set()
+    current_url = BASE_URL
+
+    for page_number in range(1, 4):
+        cache_file = CACHE_DIR / f"catalogue-page-{page_number}.html"
+        html = get_page(current_url, cache_file)
+
+        soup = BeautifulSoup(html, "html.parser")
+
+        for article in soup.select("article.product_pod"):
+            link = article.select_one("h3 a")
+
+            if link and link.get("href"):
+                absolute_url = urljoin(current_url, link["href"])
+                all_urls.add(absolute_url)
+
+        next_link = soup.select_one("li.next a")
+
+        if page_number < 3 and next_link:
+            current_url = urljoin(current_url, next_link["href"])
+
+    print(f"catalogue_pages=3")
+    print(f"discovered={len(all_urls)}")
+    print(f"unique_urls={len(all_urls)}")
+
+
 if __name__ == "__main__":
-    fetch_page()
+    discover_books()
