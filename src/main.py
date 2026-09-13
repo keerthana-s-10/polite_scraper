@@ -8,13 +8,19 @@ import requests
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, ValidationError, field_validator
 
+
 BASE_URL = "https://books.toscrape.com/"
 CACHE_DIR = Path("cache")
 OUTPUT_DIR = Path("output")
+
 BOOKS_FILE = OUTPUT_DIR / "books.json"
 ERRORS_FILE = OUTPUT_DIR / "errors.json"
+RUN_REPORT_FILE = OUTPUT_DIR / "run-report.json"
 
-USER_AGENT = "FlyRankInternship-A9/1.0 (+https://github.com/keerthana-s-10/polite_scraper)"
+USER_AGENT = (
+    "FlyRankInternship-A9/1.0 "
+    "(+https://github.com/keerthana-s-10/polite_scraper)"
+)
 
 
 class Book(BaseModel):
@@ -36,9 +42,10 @@ class Book(BaseModel):
         return value
 
 
-def get_page(url, cache_file):
+def get_page(url, cache_file, stats):
     if cache_file.exists():
         print(f"CACHE HIT: {cache_file}")
+        stats["cache_hits"] += 1
         return cache_file.read_text(encoding="utf-8"), True
 
     print(f"FETCH: {url}")
@@ -49,13 +56,21 @@ def get_page(url, cache_file):
             headers={"User-Agent": USER_AGENT},
             timeout=20
         )
-    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as error:
+    except (
+        requests.exceptions.Timeout,
+        requests.exceptions.ConnectionError
+    ) as error:
         print(f"REQUEST FAILED: {url}")
         print(f"REASON: {error}")
+        stats["failed_pages"].append(url)
         return None, False
 
     if response.status_code != 200:
-        raise RuntimeError(f"Unexpected status code: {response.status_code}")
+        print(f"FAILED: {response.status_code}: {url}")
+        stats["failed_pages"].append(url)
+        return None, False
+
+    stats["pages_fetched"] += 1
 
     content = response.text
 
@@ -65,14 +80,19 @@ def get_page(url, cache_file):
     return content, False
 
 
-def discover_books():
+def discover_books(stats):
     all_books = []
     seen_urls = set()
     current_url = BASE_URL
 
     for page_number in range(1, 4):
         cache_file = CACHE_DIR / f"catalogue-page-{page_number}.html"
-        html, _ = get_page(current_url, cache_file)
+
+        html, _ = get_page(
+            current_url,
+            cache_file,
+            stats
+        )
 
         if html is None:
             continue
@@ -83,16 +103,24 @@ def discover_books():
             link = article.select_one("h3 a")
 
             if link and link.get("href"):
-                product_url = urljoin(current_url, link["href"])
+                product_url = urljoin(
+                    current_url,
+                    link["href"]
+                )
 
                 if product_url not in seen_urls:
                     seen_urls.add(product_url)
-                    all_books.append((product_url, current_url))
+                    all_books.append(
+                        (product_url, current_url)
+                    )
 
         next_link = soup.select_one("li.next a")
 
         if page_number < 3 and next_link:
-            current_url = urljoin(current_url, next_link["href"])
+            current_url = urljoin(
+                current_url,
+                next_link["href"]
+            )
 
     print(f"catalogue_pages=3")
     print(f"discovered={len(all_books)}")
@@ -114,30 +142,51 @@ def extract_book(html, product_url, source_page):
 
     if rating:
         classes = rating.get("class", [])
+
         rating_text = next(
-            (value for value in classes if value != "star-rating"),
+            (
+                value
+                for value in classes
+                if value != "star-rating"
+            ),
             None
         )
 
-    price_text = price.get_text(strip=True) if price else ""
+    price_text = (
+        price.get_text(strip=True)
+        if price
+        else ""
+    )
 
     return {
-        "title": title.get_text(strip=True) if title else "",
+        "title": (
+            title.get_text(strip=True)
+            if title
+            else ""
+        ),
         "product_url": product_url,
         "price_text": price_text,
         "availability_text": (
-            availability.get_text(" ", strip=True)
+            availability.get_text(
+                " ",
+                strip=True
+            )
             if availability
             else ""
         ),
         "rating_text": rating_text,
         "description": (
-            description.get_text(" ", strip=True)
+            description.get_text(
+                " ",
+                strip=True
+            )
             if description
             else None
         ),
         "source_page": source_page,
-        "fetched_at": datetime.now(timezone.utc).isoformat()
+        "fetched_at": datetime.now(
+            timezone.utc
+        ).isoformat()
     }
 
 
@@ -146,6 +195,7 @@ def normalize_record(record):
 
     price_text = (
         price_text
+        .replace("Ãƒâ€šÃ‚Â£", "")
         .replace("Ã‚Â£", "")
         .replace("Â£", "")
         .replace("£", "")
@@ -159,11 +209,18 @@ def normalize_record(record):
         "price_gbp": price_gbp
     }
 
-def scrape_books(book_urls):
+
+def scrape_books(book_urls, stats):
     records = []
 
-    for index, (product_url, source_page) in enumerate(book_urls, start=1):
-        print(f"[{index}/{len(book_urls)}] {product_url}")
+    for index, (product_url, source_page) in enumerate(
+        book_urls,
+        start=1
+    ):
+        print(
+            f"[{index}/{len(book_urls)}] "
+            f"{product_url}"
+        )
 
         response = None
 
@@ -176,14 +233,32 @@ def scrape_books(book_urls):
                 )
 
                 if response.status_code == 200:
+                    stats["pages_fetched"] += 1
                     break
 
-                if response.status_code >= 500 and attempt == 0:
-                    print(f"SERVER ERROR {response.status_code}, retrying...")
+                if (
+                    response.status_code >= 500
+                    and attempt == 0
+                ):
+                    print(
+                        f"SERVER ERROR "
+                        f"{response.status_code}, "
+                        f"retrying..."
+                    )
+
                     time.sleep(1)
                     continue
 
-                print(f"FAILED: {response.status_code}: {product_url}")
+                print(
+                    f"FAILED: "
+                    f"{response.status_code}: "
+                    f"{product_url}"
+                )
+
+                stats["failed_pages"].append(
+                    product_url
+                )
+
                 response = None
                 break
 
@@ -191,12 +266,26 @@ def scrape_books(book_urls):
                 requests.exceptions.Timeout,
                 requests.exceptions.ConnectionError
             ) as error:
+
                 if attempt == 0:
-                    print("REQUEST FAILED, retrying...")
+                    print(
+                        "REQUEST FAILED, retrying..."
+                    )
                     time.sleep(1)
+
                 else:
-                    print(f"REQUEST FAILED: {product_url}")
-                    print(f"REASON: {error}")
+                    print(
+                        f"REQUEST FAILED: "
+                        f"{product_url}"
+                    )
+
+                    print(
+                        f"REASON: {error}"
+                    )
+
+                    stats["failed_pages"].append(
+                        product_url
+                    )
 
         if response is None:
             continue
@@ -222,41 +311,128 @@ def validate_and_store(records):
     for record in records:
         try:
             normalized = normalize_record(record)
-            book = Book(**normalized)
-            valid_records.append(book.model_dump())
 
-        except (ValueError, ValidationError) as error:
+            book = Book(**normalized)
+
+            valid_records.append(
+                book.model_dump()
+            )
+
+        except (
+            ValueError,
+            ValidationError
+        ) as error:
+
             errors.append({
                 "record": record,
                 "reason": str(error)
             })
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
 
     BOOKS_FILE.write_text(
-        json.dumps(valid_records, indent=2, ensure_ascii=False),
+        json.dumps(
+            valid_records,
+            indent=2,
+            ensure_ascii=False
+        ),
         encoding="utf-8"
     )
 
     ERRORS_FILE.write_text(
-        json.dumps(errors, indent=2, ensure_ascii=False),
+        json.dumps(
+            errors,
+            indent=2,
+            ensure_ascii=False
+        ),
         encoding="utf-8"
     )
 
-    print(f"valid_records={len(valid_records)}")
-    print(f"invalid_records={len(errors)}")
+    print(
+        f"valid_records={len(valid_records)}"
+    )
+
+    print(
+        f"invalid_records={len(errors)}"
+    )
+
+    return (
+        len(valid_records),
+        len(errors)
+    )
 
 
 if __name__ == "__main__":
-    book_urls = discover_books()
-    records = scrape_books(book_urls)
+    start_time = datetime.now(
+        timezone.utc
+    )
+
+    stats = {
+        "pages_fetched": 0,
+        "cache_hits": 0,
+        "failed_pages": []
+    }
+
+    book_urls = discover_books(stats)
+
+    records = scrape_books(
+        book_urls,
+        stats
+    )
 
     print()
-    print(f"detail_pages={len(records)}")
+    print(
+        f"detail_pages={len(records)}"
+    )
 
     if records:
         print()
         print("First raw record:")
         print(records[0])
 
-    validate_and_store(records)
+    valid_count, invalid_count = (
+        validate_and_store(records)
+    )
+
+    end_time = datetime.now(
+        timezone.utc
+    )
+
+    duration = (
+        end_time - start_time
+    ).total_seconds()
+
+    report = {
+        "start_time": start_time.isoformat(),
+        "duration_seconds": duration,
+        "pages_fetched": stats["pages_fetched"],
+        "cache_hits": stats["cache_hits"],
+        "valid_records": valid_count,
+        "invalid_records": invalid_count,
+        "failed_pages": stats["failed_pages"]
+    }
+
+    OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    RUN_REPORT_FILE.write_text(
+        json.dumps(
+            report,
+            indent=2
+        ),
+        encoding="utf-8"
+    )
+
+    print()
+    print("Run report:")
+    print(
+        json.dumps(
+            report,
+            indent=2
+        )
+    )
