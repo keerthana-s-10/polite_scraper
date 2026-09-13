@@ -1,11 +1,9 @@
 {
-  "start_time": "2026-09-13T04:26:16.048064+00:00",
-  "duration_seconds": 177.100407,
+  "start_time": "2026-09-13T04:35:58.722322+00:00",
+  "duration_seconds": 118.132906,
   "pages_fetched": 60,
   "cache_hits": 3,
   "valid_records": 60,
   "invalid_records": 0,
-  "failed_pages": [
-    "https://books.toscrape.com/catalogue/this-page-does-not-exist_9999/index.html"
-  ]
+  "failed_pages": []
 }
